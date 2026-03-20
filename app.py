@@ -151,9 +151,9 @@ def extract_with_direct_urls(url):
                 "js_runtimes": {"node": {}},
             }
 
-            # Passa cookies para todos os clientes — necessário em IPs de datacenter
-            # android/ios suportam cookies desde yt-dlp 2024
-            if cookie_path:
+            # android/ios NÃO aceitam cookies no yt-dlp — passá-los causa skip do cliente
+            # mweb/web aceitam cookies — necessário em IPs de datacenter
+            if cookie_path and client not in ("android", "ios"):
                 opts["cookiefile"] = cookie_path
 
             with yt_dlp.YoutubeDL(opts) as ydl:
