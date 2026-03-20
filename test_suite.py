@@ -175,9 +175,12 @@ def test_source_code():
     check("DIRECT_CLIENTS definido com android/ios",
           "DIRECT_CLIENTS" in content and "android" in content and "ios" in content)
 
-    # js_runtimes no formato correto
-    check("js_runtimes usa dict {'node': {}}",
-          '"js_runtimes": {"node": {}}' in content)
+    # js_runtimes: v2 usa CLI com --js-runtimes node (não dict no código Python)
+    uses_cli_flag = '"--js-runtimes", "node"' in content or "--js-runtimes" in content
+    uses_dict = '"js_runtimes": {"node": {}}' in content
+    check("js_runtimes configurado (CLI flag ou dict)",
+          uses_cli_flag or uses_dict,
+          "Esperado '--js-runtimes' no CLI ou 'js_runtimes': {'node': {}} no código")
     check("js_runtimes NÃO usa lista ['node']",
           '"js_runtimes": ["node"]' not in content)
 
