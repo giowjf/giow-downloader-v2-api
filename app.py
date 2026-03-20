@@ -676,32 +676,23 @@ def proxy():
 
     safe_filename = "".join(c if c not in '"/\\:' else "_" for c in filename)[:150]
 
-    def generate():
-        try:
-            while True:
-                chunk = yt_response.read(256 * 1024)  # 256KB por chunk
-                if not chunk:
-                    break
-                yield chunk
-        finally:
-            yt_response.close()
+    # Lê tudo de uma vez — gevent não suporta generators de streaming
+    # Para arquivos grandes isso usa memória mas garante que o pipe funciona
+    try:
+        data = yt_response.read()
+    finally:
+        yt_response.close()
 
+    from flask import Response
     headers = {
         "Content-Type": content_type,
         "Content-Disposition": f'attachment; filename="{safe_filename}"',
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Expose-Headers": "Content-Length, Content-Range",
-        "Cache-Control": "no-cache",
+        "Content-Length": str(len(data)),
     }
-    if content_length:
-        headers["Content-Length"] = content_length
 
-    return app.response_class(
-        generate(),
-        status=status,
-        headers=headers,
-        direct_passthrough=True,
-    )
+    return Response(data, status=status, headers=headers)
 
 
 @app.route("/cache/clear", methods=["POST"])
