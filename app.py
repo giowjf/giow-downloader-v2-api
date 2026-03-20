@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import base64
 import tempfile
@@ -113,11 +114,59 @@ DIRECT_CLIENTS = [
 ]
 
 
+def _run_ytdlp_cli(url, client, cookie_path):
+    """
+    Chama yt-dlp via CLI subprocess com --dump-json.
+
+    Vantagem sobre a biblioteca Python:
+    - O processo Node.js/EJS persiste entre chamadas via socket
+    - EJS fica "aquecido" — challenge resolve em ~1s na 2ª chamada em diante
+    - Elimina os 8-15s de boot do Node.js a cada request
+
+    Retorna o dict de info ou lança exceção.
+    """
+    cmd = [
+        "yt-dlp",
+        "--dump-json",
+        "--skip-download",
+        "--no-check-certificate",
+        "--ignore-no-formats-error",
+        "--extractor-args", f"youtube:player_client={client},formats=missing_pot",
+        "--add-header", "Accept-Language:en-US,en;q=0.9",
+        "--js-runtimes", "node",
+        "--quiet",
+    ]
+
+    # android/ios não aceitam cookies — mweb/web sim
+    if cookie_path and client not in ("android", "ios"):
+        cmd += ["--cookies", cookie_path]
+
+    cmd.append(url)
+
+    print(f"[analyze] CLI: yt-dlp client={client}")
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    if result.returncode != 0:
+        raise ValueError(f"yt-dlp CLI erro: {result.stderr[:300]}")
+
+    # --dump-json retorna uma linha JSON por vídeo
+    lines = [l for l in result.stdout.strip().splitlines() if l.startswith("{")]
+    if not lines:
+        raise ValueError("yt-dlp CLI retornou saída vazia")
+
+    return json.loads(lines[-1])
+
+
 def extract_with_direct_urls(url):
     """
-    Extrai metadados e URLs diretas dos streams.
-    Usa clientes android/ios que retornam URLs sem amarração de IP,
-    permitindo download direto pelo browser do usuário.
+    Extrai metadados e URLs diretas via CLI subprocess.
+    O CLI mantém o Node.js/EJS aquecido entre chamadas — muito mais rápido
+    que a biblioteca Python que reinicia o Node.js a cada chamada.
     """
     url_key = hashlib.md5(url.encode()).hexdigest()
 
@@ -133,31 +182,8 @@ def extract_with_direct_urls(url):
     last_error = None
 
     for client in DIRECT_CLIENTS:
-        print(f"[analyze] Tentando client={client}")
         try:
-            opts = {
-                "quiet": True,
-                "skip_download": True,
-                "nocheckcertificate": True,
-                "check_formats": False,
-                "ignore_no_formats_error": True,
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": [client],
-                        "formats": ["missing_pot"],
-                    }
-                },
-                "http_headers": {"Accept-Language": "en-US,en;q=0.9"},
-                "js_runtimes": {"node": {}},
-            }
-
-            # android/ios NÃO aceitam cookies no yt-dlp — passá-los causa skip do cliente
-            # mweb/web aceitam cookies — necessário em IPs de datacenter
-            if cookie_path and client not in ("android", "ios"):
-                opts["cookiefile"] = cookie_path
-
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            info = _run_ytdlp_cli(url, client, cookie_path)
 
             if not info:
                 raise ValueError("retornou vazio")
@@ -182,18 +208,18 @@ def extract_with_direct_urls(url):
                 and not f.get("url", "").startswith("manifest")
             ]
 
-            print(f"[analyze] client={client} — {len(video_formats)} vídeo, {len(audio_formats)} áudio com URL direta")
+            print(f"[analyze] client={client} — {len(video_formats)} vídeo, {len(audio_formats)} áudio")
 
             if not video_formats and not audio_formats:
                 last_error = f"client={client} sem URLs diretas utilizáveis"
                 continue
 
             # Detecta se URLs têm &ip= (vinculadas ao IP do servidor)
-            # android/ios não têm &ip= — browser baixa direto
-            # mweb tem &ip= — precisa passar pelo Worker como proxy
+            # android/ios não têm &ip= — browser baixa direto sem proxy
+            # mweb tem &ip= — precisa do Worker como proxy
             sample_url = (video_formats[0] if video_formats else audio_formats[0]).get("url", "")
             urls_have_ip = "&ip=" in sample_url
-            print(f"[analyze] client={client} — URLs com &ip=: {urls_have_ip}")
+            print(f"[analyze] client={client} OK — urls_need_proxy={urls_have_ip}")
 
             result = {
                 "title": info.get("title"),
@@ -201,7 +227,7 @@ def extract_with_direct_urls(url):
                 "thumbnail": info.get("thumbnail"),
                 "uploader": info.get("uploader"),
                 "client_used": client,
-                "urls_need_proxy": urls_have_ip,  # front usa Worker só quando necessário
+                "urls_need_proxy": urls_have_ip,
                 "video_formats": video_formats,
                 "audio_formats": audio_formats,
             }
