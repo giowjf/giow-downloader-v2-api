@@ -127,14 +127,16 @@ def _run_ytdlp_cli(url, client, cookie_path):
     """
     cmd = [
         "yt-dlp",
-        "--dump-json",
+        "--dump-json",          # retorna JSON com todos os formatos no campo "formats"
         "--skip-download",
         "--no-check-certificate",
         "--ignore-no-formats-error",
+        "--no-playlist",
         "--extractor-args", f"youtube:player_client={client},formats=missing_pot",
         "--add-header", "Accept-Language:en-US,en;q=0.9",
         "--js-runtimes", "node",
-        "--quiet",
+        # Sem --format: o yt-dlp retorna o dict completo com todos os formatos disponíveis
+        # Com --format X: retornaria só o formato selecionado (comportamento errado aqui)
     ]
 
     # android/ios não aceitam cookies — mweb/web sim
@@ -208,7 +210,8 @@ def extract_with_direct_urls(url):
                 and not f.get("url", "").startswith("manifest")
             ]
 
-            print(f"[analyze] client={client} — {len(video_formats)} vídeo, {len(audio_formats)} áudio")
+            all_fmts = info.get("formats") or []
+            print(f"[analyze] client={client} — total={len(all_fmts)} formatos, {len(video_formats)} vídeo, {len(audio_formats)} áudio")
 
             if not video_formats and not audio_formats:
                 last_error = f"client={client} sem URLs diretas utilizáveis"
