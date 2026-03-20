@@ -436,6 +436,151 @@ def diag():
     })
 
 
+@app.route("/debug-formats")
+def debug_formats():
+    """
+    Diagnóstico completo — testa cada cliente individualmente e reporta:
+    - Quantos formatos cada cliente retorna
+    - Se URLs têm &ip= (vinculadas ao servidor) ou não
+    - Quais resoluções estão disponíveis
+    - Tempo de cada extração
+    - Status dos cookies e Node.js
+    """
+    TEST_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    cookie_path = get_cookie_file()
+    results = {}
+    t_total = time.time()
+
+    # ── 1. Ambiente ──────────────────────────────────────────────────────────
+    node_check = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5)
+    ytdlp_check = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=5)
+    ffmpeg_check = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
+
+    results["environment"] = {
+        "node": node_check.stdout.strip() if node_check.returncode == 0 else f"ERRO: {node_check.stderr[:100]}",
+        "yt_dlp": ytdlp_check.stdout.strip() if ytdlp_check.returncode == 0 else f"ERRO: {ytdlp_check.stderr[:100]}",
+        "ffmpeg": "ok" if ffmpeg_check.returncode == 0 else "não encontrado",
+        "cookies_valid": cookie_path is not None,
+        "cookies_path": cookie_path,
+    }
+
+    # ── 2. Teste por cliente ──────────────────────────────────────────────────
+    results["clients"] = {}
+
+    for client in DIRECT_CLIENTS:
+        t0 = time.time()
+        try:
+            cmd = [
+                "yt-dlp",
+                "--dump-single-json",
+                "--no-check-certificate",
+                "--ignore-no-formats-error",
+                "--no-playlist",
+                "--extractor-args", f"youtube:player_client={client},formats=missing_pot",
+                "--js-runtimes", "node",
+                "--skip-download",
+            ]
+            if cookie_path and client not in ("android", "ios"):
+                cmd += ["--cookies", cookie_path]
+            cmd.append(TEST_URL)
+
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            elapsed = round(time.time() - t0, 2)
+
+            if r.returncode != 0:
+                results["clients"][client] = {
+                    "ok": False,
+                    "elapsed": elapsed,
+                    "error": r.stderr[-400:],
+                }
+                continue
+
+            lines = [l for l in r.stdout.strip().splitlines() if l.startswith("{")]
+            if not lines:
+                results["clients"][client] = {
+                    "ok": False,
+                    "elapsed": elapsed,
+                    "error": "sem JSON no output",
+                    "stdout_preview": r.stdout[:200],
+                }
+                continue
+
+            info = json.loads(lines[-1])
+            fmts = info.get("formats") or []
+
+            video_fmts = [f for f in fmts
+                          if (f.get("vcodec") or "none") != "none"
+                          and (f.get("height") or 0) > 0
+                          and f.get("url")
+                          and not f.get("url","").startswith("manifest")]
+
+            audio_fmts = [f for f in fmts
+                          if (f.get("acodec") or "none") != "none"
+                          and (f.get("vcodec") or "none") == "none"
+                          and f.get("url")]
+
+            sample_url = (video_fmts[0] if video_fmts else (audio_fmts[0] if audio_fmts else {})).get("url","")
+            urls_have_ip = "&ip=" in sample_url
+
+            results["clients"][client] = {
+                "ok": len(video_fmts) > 0,
+                "elapsed_seconds": elapsed,
+                "total_formats_raw": len(fmts),
+                "video_formats_usable": len(video_fmts),
+                "audio_formats_usable": len(audio_fmts),
+                "urls_have_ip": urls_have_ip,
+                "download_mode": "direto_youtube" if not urls_have_ip else "via_worker_proxy",
+                "resolutions": sorted(
+                    set(f"{f.get('height')}p" for f in video_fmts if f.get("height")),
+                    key=lambda x: int(x[:-1]), reverse=True
+                )[:8],
+                "formats_detail": [
+                    {
+                        "id": f.get("format_id"),
+                        "ext": f.get("ext"),
+                        "resolution": f"{f.get('height')}p" if f.get("height") else f.get("resolution"),
+                        "vcodec": (f.get("vcodec") or "none")[:20],
+                        "acodec": (f.get("acodec") or "none")[:20],
+                        "filesize_mb": round(f.get("filesize",0)/1_048_576, 1) if f.get("filesize") else None,
+                        "has_url": bool(f.get("url")),
+                        "url_has_ip": "&ip=" in (f.get("url") or ""),
+                    }
+                    for f in fmts if f.get("url")
+                ],
+                "stderr_warnings": [l for l in r.stderr.splitlines() if "WARNING" in l][:5],
+            }
+
+        except subprocess.TimeoutExpired:
+            results["clients"][client] = {"ok": False, "elapsed_seconds": 90, "error": "timeout (90s)"}
+        except Exception as e:
+            results["clients"][client] = {"ok": False, "error": str(e)[:300]}
+
+    # ── 3. Sumário ────────────────────────────────────────────────────────────
+    best_client = None
+    best_direct = None
+    for c, r in results["clients"].items():
+        if r.get("ok"):
+            if best_client is None:
+                best_client = c
+            if not r.get("urls_have_ip") and best_direct is None:
+                best_direct = c
+
+    results["summary"] = {
+        "total_elapsed_seconds": round(time.time() - t_total, 2),
+        "best_client_any": best_client,
+        "best_client_direct_url": best_direct,
+        "recommendation": (
+            f"Usar '{best_direct}' — URLs sem &ip=, download direto do YouTube (rápido)"
+            if best_direct else
+            f"Usar '{best_client}' — URLs com &ip=, precisa Worker como proxy (lento)"
+            if best_client else
+            "Nenhum cliente funcionou — verificar cookies e Node.js"
+        ),
+    }
+
+    return jsonify(results)
+
+
 @app.route("/warmup")
 def warmup():
     get_cookie_file()
