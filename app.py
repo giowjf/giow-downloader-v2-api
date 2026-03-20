@@ -127,16 +127,15 @@ def _run_ytdlp_cli(url, client, cookie_path):
     """
     cmd = [
         "yt-dlp",
-        "--dump-json",          # retorna JSON com todos os formatos no campo "formats"
-        "--skip-download",
+        "--dump-single-json",   # retorna JSON único com campo "formats" completo
         "--no-check-certificate",
         "--ignore-no-formats-error",
         "--no-playlist",
         "--extractor-args", f"youtube:player_client={client},formats=missing_pot",
         "--add-header", "Accept-Language:en-US,en;q=0.9",
         "--js-runtimes", "node",
-        # Sem --format: o yt-dlp retorna o dict completo com todos os formatos disponíveis
-        # Com --format X: retornaria só o formato selecionado (comportamento errado aqui)
+        "--format", "bestvideo+bestaudio/best",  # força yt-dlp a buscar todos os streams
+        "--skip-download",
     ]
 
     # android/ios não aceitam cookies — mweb/web sim
