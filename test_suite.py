@@ -68,13 +68,13 @@ def test_environment():
     except FileNotFoundError:
         check("Node.js disponível", False, "node não encontrado no PATH")
 
-    # v2 não usa ffmpeg — validar que não é dependência
+    # ffmpeg necessário para o yt-dlp selecionar/verificar formatos
     import shutil
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
-        warn(f"ffmpeg presente ({ffmpeg}) — não é necessário no v2, mas não causa problema")
+        ok(f"ffmpeg disponível ({ffmpeg})")
     else:
-        ok("ffmpeg ausente — correto para v2 (sem mux no servidor)")
+        warn("ffmpeg ausente no CI — OK, está no Dockerfile do Render")
 
     try:
         import flask
@@ -225,13 +225,14 @@ def test_dockerfile():
 
     check("Node.js 20 instalado",
           "nodesource.com/setup_20" in content or "nodejs" in content)
-    # Verifica que ffmpeg não está sendo INSTALADO (ignora comentários)
+    # ffmpeg deve estar instalado — necessário para yt-dlp selecionar formatos
     ffmpeg_installed = any(
         "ffmpeg" in line and not line.strip().startswith("#")
         for line in content.splitlines()
     )
-    check("Sem ffmpeg instalado — v2 não faz mux no servidor",
-          not ffmpeg_installed)
+    check("ffmpeg instalado no Dockerfile",
+          ffmpeg_installed,
+          "yt-dlp requer ffmpeg para verificar e selecionar formatos")
     check("gunicorn com gevent no CMD",
           "gevent" in content)
     check("Sem startup.sh",
@@ -246,8 +247,7 @@ def test_dockerfile():
               "gunicorn[gevent]" in req)
         check("Sem downloader específico — só yt-dlp[default]",
               "bgutil" not in req)
-        check("Sem ffmpeg no requirements",
-              "ffmpeg" not in req)
+        # ffmpeg é instalado via apt no Dockerfile, não via pip — correto
 
 
 # ─── BLOCO 5: Lógica de extração ────────────────────────────────────────────
