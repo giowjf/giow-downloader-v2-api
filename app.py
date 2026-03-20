@@ -50,15 +50,31 @@ def get_cookie_file():
     return path
 
 
+def _validate_cookie_data(data):
+    """Verifica se o conteúdo parece um arquivo Netscape válido."""
+    if not data or len(data.strip()) < 10:
+        return False
+    lines = [l for l in data.strip().splitlines() if l.strip()]
+    if not lines:
+        return False
+    # Deve começar com cabeçalho Netscape ou ter linhas com formato de cookie
+    has_header = any("Netscape" in l or l.startswith("#") for l in lines[:3])
+    has_cookie = any(len(l.split("\t")) >= 6 for l in lines if not l.startswith("#"))
+    return has_header or has_cookie
+
+
 def _load_cookie_file():
     cookies_b64 = os.environ.get("YOUTUBE_COOKIES_B64")
     if cookies_b64:
         try:
             data = base64.b64decode(cookies_b64).decode("utf-8")
-            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, dir="/tmp")
-            tmp.write(data); tmp.flush(); tmp.close()
-            print(f"[cookies] B64 ({len(data)} bytes)")
-            return tmp.name
+            if not _validate_cookie_data(data):
+                print(f"[cookies] AVISO: B64 não parece formato Netscape válido")
+            else:
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, dir="/tmp")
+                tmp.write(data); tmp.flush(); tmp.close()
+                print(f"[cookies] B64 ({len(data)} bytes)")
+                return tmp.name
         except Exception as e:
             print(f"[cookies] Erro B64: {e}")
 
@@ -66,14 +82,18 @@ def _load_cookie_file():
         try:
             with open("/etc/secrets/cookies.txt") as f:
                 data = f.read()
-            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, dir="/tmp")
-            tmp.write(data); tmp.flush(); tmp.close()
-            print(f"[cookies] /etc/secrets ({len(data)} bytes)")
-            return tmp.name
+            if not _validate_cookie_data(data):
+                print(f"[cookies] AVISO: /etc/secrets não parece formato Netscape válido — ignorando")
+                print(f"[cookies] Conteúdo (primeiros 100 chars): {repr(data[:100])}")
+            else:
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, dir="/tmp")
+                tmp.write(data); tmp.flush(); tmp.close()
+                print(f"[cookies] /etc/secrets ({len(data)} bytes)")
+                return tmp.name
         except Exception as e:
             print(f"[cookies] Erro secrets: {e}")
 
-    print("[cookies] Nenhum cookie — usando clientes sem cookie")
+    print("[cookies] Nenhum cookie válido — usando clientes sem cookie")
     return None
 
 
@@ -128,8 +148,9 @@ def extract_with_direct_urls(url):
                 "js_runtimes": {"node": {}},
             }
 
-            # android/ios não suportam cookies — só passa se for mweb
-            if cookie_path and client == "mweb":
+            # Passa cookies para todos os clientes — necessário em IPs de datacenter
+            # android/ios suportam cookies desde yt-dlp 2024
+            if cookie_path:
                 opts["cookiefile"] = cookie_path
 
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -317,9 +338,37 @@ def health():
 @app.route("/diag")
 def diag():
     print("[diag] Iniciando...")
+
+    # ── Diagnóstico de cookies ─────────────────────────────────────────────
+    secret_exists = os.path.exists("/etc/secrets/cookies.txt")
+    secret_size = 0
+    secret_preview = ""
+    secret_valid = False
+
+    if secret_exists:
+        try:
+            with open("/etc/secrets/cookies.txt") as f:
+                raw = f.read()
+            secret_size = len(raw)
+            secret_preview = repr(raw[:120])
+            secret_valid = _validate_cookie_data(raw)
+        except Exception as e:
+            secret_preview = f"ERRO ao ler: {e}"
+
     cookie_path = get_cookie_file()
 
-    # Teste real com vídeo curto
+    cookie_info = {
+        "secret_file_exists": secret_exists,
+        "secret_file_size_bytes": secret_size,
+        "secret_file_preview": secret_preview,
+        "secret_file_valid_netscape": secret_valid,
+        "cookie_path_loaded": cookie_path,
+        "cookie_cache_active": cookie_path is not None,
+    }
+
+    print(f"[diag] Cookies: {cookie_info}")
+
+    # ── Teste real com vídeo curto ────────────────────────────────────────
     test_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     test_result = {"ok": False}
     try:
@@ -336,9 +385,13 @@ def diag():
     except Exception as e:
         test_result = {"ok": False, "error": str(e)[:300]}
 
+    overall = "OK" if test_result["ok"] else "PROBLEMAS"
+    if not secret_valid:
+        overall = "COOKIE_INVALIDO"
+
     return jsonify({
-        "overall": "OK" if test_result["ok"] else "PROBLEMAS",
-        "cookies": cookie_path is not None,
+        "overall": overall,
+        "cookies": cookie_info,
         "extraction": test_result,
     })
 
