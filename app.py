@@ -193,21 +193,36 @@ def extract_with_direct_urls(url):
             formats = info.get("formats") or []
 
             # Filtra formatos com URL direta válida e vídeo real
+            def is_direct_url(f):
+                """Retorna True apenas para URLs diretas de arquivo — não manifests/HLS."""
+                url = f.get("url") or ""
+                protocol = f.get("protocol") or ""
+                ext = f.get("ext") or ""
+                # Exclui: m3u8, manifests, dash XML, mhtml (thumbnails)
+                if ext in ("m3u8", "mhtml"):
+                    return False
+                if protocol in ("m3u8", "m3u8_native", "dash", "http_dash_segments"):
+                    return False
+                if "m3u8" in url or ".m3u8" in url:
+                    return False
+                if url.startswith("manifest"):
+                    return False
+                # Só aceita http/https direto
+                return url.startswith("http") and bool(url)
+
             video_formats = [
                 f for f in formats
-                if f.get("url")
+                if is_direct_url(f)
                 and (f.get("vcodec") or "none") != "none"
                 and (f.get("height") or 0) > 0
-                and not f.get("url", "").startswith("manifest")
             ]
 
             # Formatos só de áudio com URL direta
             audio_formats = [
                 f for f in formats
-                if f.get("url")
+                if is_direct_url(f)
                 and (f.get("acodec") or "none") != "none"
                 and (f.get("vcodec") or "none") == "none"
-                and not f.get("url", "").startswith("manifest")
             ]
 
             all_fmts = info.get("formats") or []
@@ -453,14 +468,17 @@ def debug_formats():
     t_total = time.time()
 
     # ── 1. Ambiente ──────────────────────────────────────────────────────────
-    node_check = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5)
-    ytdlp_check = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True, timeout=5)
-    ffmpeg_check = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
+    def safe_cmd(cmd, timeout=30):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            return r.stdout.strip() if r.returncode == 0 else f"ERRO: {r.stderr[:100]}"
+        except Exception as e:
+            return f"ERRO: {str(e)[:100]}"
 
     results["environment"] = {
-        "node": node_check.stdout.strip() if node_check.returncode == 0 else f"ERRO: {node_check.stderr[:100]}",
-        "yt_dlp": ytdlp_check.stdout.strip() if ytdlp_check.returncode == 0 else f"ERRO: {ytdlp_check.stderr[:100]}",
-        "ffmpeg": "ok" if ffmpeg_check.returncode == 0 else "não encontrado",
+        "node": safe_cmd(["node", "--version"]),
+        "yt_dlp": safe_cmd(["yt-dlp", "--version"]),
+        "ffmpeg": "ok" if "ERRO" not in safe_cmd(["ffmpeg", "-version"]) else "não encontrado",
         "cookies_valid": cookie_path is not None,
         "cookies_path": cookie_path,
     }
