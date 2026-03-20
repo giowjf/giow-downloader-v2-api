@@ -105,12 +105,13 @@ def _load_cookie_file():
 # Isso permite que o browser do usuário baixe diretamente do YouTube.
 
 # Ordem de prioridade:
-# android/ios retornam URLs sem &ip= — browser baixa direto do YouTube sem proxy
-# mweb retorna URLs com &ip= vinculado ao servidor — requer proxy, muito mais lento
+# web+default com cookies: retorna DASH completo (4K, 1080p) sem precisar GVS PO Token
+# android/ios: retornam só 360p muxado em IPs de datacenter sem GVS PO Token
+# mweb: fallback, retorna 360p muxado com &ip= vinculado ao servidor
 DIRECT_CLIENTS = [
-    "android",   # DASH sem &ip= — download direto pelo browser
-    "ios",       # HLS/DASH sem &ip= — download direto pelo browser
-    "mweb",      # último recurso — URLs com &ip=, requer Worker como proxy
+    "web",       # DASH completo com cookies — sem GVS PO Token necessário
+    "android",   # fallback — só 360p sem GVS token em datacenter
+    "mweb",      # último recurso — 360p com &ip=, requer Worker proxy
 ]
 
 
@@ -131,15 +132,15 @@ def _run_ytdlp_cli(url, client, cookie_path):
         "--no-check-certificate",
         "--ignore-no-formats-error",
         "--no-playlist",
-        "--extractor-args", f"youtube:player_client={client},formats=missing_pot",
+        "--extractor-args", f"youtube:player_client={client}+formats=missing_pot",
         "--add-header", "Accept-Language:en-US,en;q=0.9",
         "--js-runtimes", "node",
         "--format", "bestvideo+bestaudio/best",  # força yt-dlp a buscar todos os streams
         "--skip-download",
     ]
 
-    # android/ios não aceitam cookies — mweb/web sim
-    if cookie_path and client not in ("android", "ios"):
+    # web/mweb aceitam cookies — android não aceita no yt-dlp atual
+    if cookie_path and client != "android":
         cmd += ["--cookies", cookie_path]
 
     cmd.append(url)
@@ -476,11 +477,13 @@ def debug_formats():
                 "--no-check-certificate",
                 "--ignore-no-formats-error",
                 "--no-playlist",
-                "--extractor-args", f"youtube:player_client={client},formats=missing_pot",
+                "--extractor-args", f"youtube:player_client={client}+formats=missing_pot",
                 "--js-runtimes", "node",
                 "--skip-download",
             ]
-            if cookie_path and client not in ("android", "ios"):
+            # web precisa de cookies para DASH completo
+            # android não aceita cookies no yt-dlp atual
+            if cookie_path and client != "android":
                 cmd += ["--cookies", cookie_path]
             cmd.append(TEST_URL)
 
