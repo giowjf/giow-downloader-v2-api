@@ -631,6 +631,79 @@ def warmup():
     })
 
 
+@app.route("/proxy")
+def proxy():
+    """
+    Proxy de download — faz fetch da URL do YouTube server-side e faz pipe ao browser.
+    Substitui o Cloudflare Worker: sem throttling, banda total do Render.
+    Suporta Range requests para retomada de download.
+    """
+    target_url = request.args.get("url")
+    filename = request.args.get("filename", "video.mp4")
+
+    if not target_url:
+        return jsonify({"error": "missing url"}), 400
+
+    # Valida que é URL do YouTube
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(target_url).hostname or ""
+        if not any(host.endswith(h) for h in ["googlevideo.com", "youtube.com"]):
+            return jsonify({"error": "url not allowed"}), 403
+    except Exception:
+        return jsonify({"error": "invalid url"}), 400
+
+    # Repassa Range header se presente (suporte a retomada)
+    fetch_headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36",
+        "Referer": "https://www.youtube.com/",
+    }
+    range_header = request.headers.get("Range")
+    if range_header:
+        fetch_headers["Range"] = range_header
+
+    try:
+        import urllib.request as urlreq
+        req = urlreq.Request(target_url, headers=fetch_headers)
+        yt_response = urlreq.urlopen(req, timeout=30)
+    except Exception as e:
+        return jsonify({"error": f"fetch failed: {str(e)[:200]}"}), 502
+
+    # Streaming: lê em chunks e envia ao browser sem bufferizar tudo
+    content_type = yt_response.headers.get("Content-Type", "video/mp4")
+    content_length = yt_response.headers.get("Content-Length")
+    status = yt_response.status
+
+    safe_filename = "".join(c if c not in '"/\\:' else "_" for c in filename)[:150]
+
+    def generate():
+        try:
+            while True:
+                chunk = yt_response.read(256 * 1024)  # 256KB por chunk
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            yt_response.close()
+
+    headers = {
+        "Content-Type": content_type,
+        "Content-Disposition": f'attachment; filename="{safe_filename}"',
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Length, Content-Range",
+        "Cache-Control": "no-cache",
+    }
+    if content_length:
+        headers["Content-Length"] = content_length
+
+    return app.response_class(
+        generate(),
+        status=status,
+        headers=headers,
+        direct_passthrough=True,
+    )
+
+
 @app.route("/cache/clear", methods=["POST"])
 def clear_cache():
     global _analyze_cache, _cookie_cache
