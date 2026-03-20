@@ -225,8 +225,13 @@ def test_dockerfile():
 
     check("Node.js 20 instalado",
           "nodesource.com/setup_20" in content or "nodejs" in content)
-    check("Sem ffmpeg — v2 não faz mux no servidor",
-          "ffmpeg" not in content)
+    # Verifica que ffmpeg não está sendo INSTALADO (ignora comentários)
+    ffmpeg_installed = any(
+        "ffmpeg" in line and not line.strip().startswith("#")
+        for line in content.splitlines()
+    )
+    check("Sem ffmpeg instalado — v2 não faz mux no servidor",
+          not ffmpeg_installed)
     check("gunicorn com gevent no CMD",
           "gevent" in content)
     check("Sem startup.sh",
