@@ -1,1 +1,42 @@
+name: Testes antes do deploy
 
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar dependências Python
+        run: pip install "yt-dlp[default]" flask flask-cors "gunicorn[gevent]"
+
+      - name: Verificar ambiente
+        run: |
+          echo "Python: $(python --version)"
+          echo "Node:   $(node --version)"
+          echo "yt-dlp: $(yt-dlp --version)"
+
+      - name: Rodar testes unitários
+        run: python test_suite.py unit
+
+      - name: Verificar sintaxe Python
+        run: |
+          python -m py_compile app.py
+          echo "Sintaxe OK"
