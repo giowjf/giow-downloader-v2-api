@@ -3,8 +3,8 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Node.js 20 para EJS nativo do yt-dlp
-# Sem ffmpeg — não fazemos mais mux/conversão no servidor
-RUN apt-get update && apt-get install -y curl \
+# ffmpeg necessário para o yt-dlp verificar/selecionar formatos
+RUN apt-get update && apt-get install -y ffmpeg curl \
   && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && apt-get install -y nodejs \
   && rm -rf /var/lib/apt/lists/*
