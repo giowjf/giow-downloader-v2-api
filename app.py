@@ -604,8 +604,31 @@ def debug_formats():
 
 @app.route("/warmup")
 def warmup():
-    get_cookie_file()
-    return jsonify({"status": "warm", "cache": len(_analyze_cache)})
+    """Aquece o EJS rodando yt-dlp — chamadas seguintes ficam em 3-5s."""
+    t0 = time.time()
+    warmed = False
+    try:
+        cookie_path = get_cookie_file()
+        cmd = [
+            "yt-dlp", "--dump-single-json", "--skip-download",
+            "--no-playlist", "--js-runtimes", "node",
+            "--extractor-args", "youtube:player_client=web+formats=missing_pot",
+            "--quiet",
+        ]
+        if cookie_path:
+            cmd += ["--cookies", cookie_path]
+        cmd.append("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        subprocess.run(cmd, capture_output=True, text=True, timeout=50)
+        warmed = True
+        print(f"[warmup] EJS aquecido em {round(time.time()-t0,2)}s")
+    except Exception as e:
+        print(f"[warmup] erro: {e}")
+    return jsonify({
+        "status": "warm",
+        "ejs_warmed": warmed,
+        "elapsed_seconds": round(time.time() - t0, 2),
+        "cache_entries": len(_analyze_cache),
+    })
 
 
 @app.route("/cache/clear", methods=["POST"])
