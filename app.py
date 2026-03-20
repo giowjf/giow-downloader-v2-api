@@ -103,10 +103,13 @@ def _load_cookie_file():
 # pois celulares mudam de rede constantemente — o app oficial usa as mesmas URLs.
 # Isso permite que o browser do usuário baixe diretamente do YouTube.
 
+# Ordem de prioridade:
+# android/ios retornam URLs sem &ip= — browser baixa direto do YouTube sem proxy
+# mweb retorna URLs com &ip= vinculado ao servidor — requer proxy, muito mais lento
 DIRECT_CLIENTS = [
-    "android",   # DASH, sem SABR, sem PO Token — URLs livres de IP
-    "ios",       # HLS + DASH, GVS token — URLs livres de IP
-    "mweb",      # fallback HLS
+    "android",   # DASH sem &ip= — download direto pelo browser
+    "ios",       # HLS/DASH sem &ip= — download direto pelo browser
+    "mweb",      # último recurso — URLs com &ip=, requer Worker como proxy
 ]
 
 
@@ -185,12 +188,20 @@ def extract_with_direct_urls(url):
                 last_error = f"client={client} sem URLs diretas utilizáveis"
                 continue
 
+            # Detecta se URLs têm &ip= (vinculadas ao IP do servidor)
+            # android/ios não têm &ip= — browser baixa direto
+            # mweb tem &ip= — precisa passar pelo Worker como proxy
+            sample_url = (video_formats[0] if video_formats else audio_formats[0]).get("url", "")
+            urls_have_ip = "&ip=" in sample_url
+            print(f"[analyze] client={client} — URLs com &ip=: {urls_have_ip}")
+
             result = {
                 "title": info.get("title"),
                 "duration": info.get("duration"),
                 "thumbnail": info.get("thumbnail"),
                 "uploader": info.get("uploader"),
                 "client_used": client,
+                "urls_need_proxy": urls_have_ip,  # front usa Worker só quando necessário
                 "video_formats": video_formats,
                 "audio_formats": audio_formats,
             }
@@ -306,6 +317,7 @@ def analyze():
             "thumbnail": info["thumbnail"],
             "uploader": info["uploader"],
             "client_used": info["client_used"],
+            "urls_need_proxy": info.get("urls_need_proxy", True),
             "formats": formats,
             "elapsed": round(elapsed, 2),
         })
